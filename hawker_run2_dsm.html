@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>DSM - Hawker Run 2</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    html, body, #map { margin:0; padding:0; width:100%; height:100%; }
+    #label {
+      position:absolute; top:10px; left:60px; z-index:1000;
+      background:rgba(255,255,255,0.88); padding:6px 14px;
+      border-radius:4px; font:13px/1.5 sans-serif; pointer-events:none;
+    }
+    #home { position:absolute; top:10px; right:10px; z-index:1000;
+      background:rgba(255,255,255,0.92); padding:6px 12px; border-radius:4px;
+      font:12px/1 sans-serif; text-decoration:none; color:#0074D9; }
+    #loader {
+      position:absolute; inset:0; z-index:2000;
+      display:flex; align-items:center; justify-content:center;
+      background:#1c1f23; color:#e9edf1;
+      font:14px/1.5 -apple-system,Segoe UI,sans-serif;
+      transition:opacity .4s ease; opacity:1;
+    }
+    #loader.hidden { opacity:0; pointer-events:none; }
+    #loader .card { width:320px; text-align:center; }
+    #loader h2 { font-size:15px; font-weight:600; margin:0 0 4px; }
+    #loader .sub { font-size:12px; color:#9aa3ad; margin:0 0 16px; }
+    #bar-track { height:6px; background:#33383f; border-radius:3px; overflow:hidden; }
+    #bar-fill  { height:100%; width:0%; background:#3da9fc; transition:width .15s linear; }
+    #count { margin-top:10px; font-size:12px; color:#9aa3ad; font-variant-numeric:tabular-nums; }
+    #spinner { width:22px; height:22px; margin:0 auto 14px; border:3px solid #33383f;
+               border-top-color:#3da9fc; border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="label"><strong>DSM - Hawker Run 2</strong></div>
+  <a id="home" href="index.html">&#8962; All scans</a>
+
+  <div id="loader">
+    <div class="card">
+      <div id="spinner"></div>
+      <h2>Loading DSM</h2>
+      <p class="sub">Caching imagery tiles...</p>
+      <div id="bar-track"><div id="bar-fill"></div></div>
+      <div id="count">preparing...</div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const TILE_URL    = "http://localhost:8080/tiles/hawker_run2/dsm/{z}/{x}/{y}.png";
+    const BOUNDS      = { w:141.260199, s:-37.474135, e:141.269751, n:-37.466281 };
+    const MIN_NZ      = 14;
+    const MAX_NZ      = 22;
+    const DO_PREFETCH = true;
+    const CAP         = 6000;
+    const CONC        = 12;
+
+    const loader  = document.getElementById("loader");
+    const barFill = document.getElementById("bar-fill");
+    const countEl = document.getElementById("count");
+
+    const map = L.map("map", { maxZoom: 22, fadeAnimation: false })
+      .fitBounds([[BOUNDS.s, BOUNDS.w], [BOUNDS.n, BOUNDS.e]]);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "(c) OpenStreetMap contributors", maxZoom: 22
+    }).addTo(map);
+
+    function lon2x(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
+    function lat2y(lat, z) {
+      const r = lat * Math.PI / 180;
+      return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * Math.pow(2, z));
+    }
+    function tilesForView(z) {
+      z = Math.max(MIN_NZ, Math.min(MAX_NZ, z));
+      const xmin = lon2x(BOUNDS.w, z), xmax = lon2x(BOUNDS.e, z);
+      const ymin = lat2y(BOUNDS.n, z), ymax = lat2y(BOUNDS.s, z);
+      const urls = [];
+      for (let x = xmin; x <= xmax; x++)
+        for (let y = ymin; y <= ymax; y++)
+          urls.push(TILE_URL.replace("{z}", z).replace("{x}", x).replace("{y}", y));
+      return urls;
+    }
+
+    function showMap() {
+      L.tileLayer(TILE_URL, {
+        opacity: 0.95, maxZoom: 22,
+        minNativeZoom: MIN_NZ, maxNativeZoom: MAX_NZ,
+        bounds: [[BOUNDS.s, BOUNDS.w], [BOUNDS.n, BOUNDS.e]],
+        updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 4,
+        attribution: "UAV Survey 2026"
+      }).addTo(map);
+      loader.classList.add("hidden");
+      setTimeout(() => loader.remove(), 500);
+    }
+
+    async function prefetch() {
+      const urls = tilesForView(map.getZoom());
+      const total = urls.length;
+      if (!DO_PREFETCH || total === 0 || total > CAP) {
+        countEl.textContent = total > CAP ? "large extent - streaming..." : "";
+        showMap(); return;
+      }
+      let done = 0, i = 0;
+      const tick = () => {
+        const pct = Math.round(done / total * 100);
+        barFill.style.width = pct + "%";
+        countEl.textContent = done + " / " + total + " tiles  (" + pct + "%)";
+      };
+      tick();
+      const worker = async () => {
+        while (i < total) {
+          const u = urls[i++];
+          try { await fetch(u, { cache: "force-cache" }); } catch (e) {}
+          done++; tick();
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONC, total) }, worker));
+      showMap();
+    }
+
+    const failSafe = setTimeout(showMap, 20000);
+    prefetch().finally(() => clearTimeout(failSafe));
+  </script>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Point Cloud — Hetherington Run 5</title>
+  <style>
+    html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; }
+    #potree_render_area { width:100%; height:100%; }
+    #err { position:absolute; inset:0; display:none; align-items:center;
+            justify-content:center; background:#1c1f23; color:#e9edf1;
+            font:14px/1.6 sans-serif; text-align:center; z-index:9999; }
+  </style>
+  <!-- LOCAL Potree assets (run setup_potree.py) -->
+  <link rel="stylesheet" href="build/potree/potree.css">
+  <link rel="stylesheet" href="libs/jquery-ui/jquery-ui.min.css">
+  <link rel="stylesheet" href="libs/openlayers3/ol.css">
+  <link rel="stylesheet" href="libs/spectrum/spectrum.css">
+  <link rel="stylesheet" href="libs/jstree/themes/mixed/style.css">
+</head>
+<body>
+  <div id="potree_render_area"></div>
+  <div id="potree_sidebar_container"></div>
+  <div id="err">
+    <div>
+      <p><strong>Point cloud failed to load.</strong></p>
+      <p>Run <code>python setup_potree.py</code> so <code>build/</code> and
+         <code>libs/</code> exist beside this page, then re-run the pipeline.</p>
+    </div>
+  </div>
+
+  <script src="libs/jquery/jquery-3.1.1.min.js"></script>
+  <script src="libs/spectrum/spectrum.js"></script>
+  <script src="libs/jquery-ui/jquery-ui.min.js"></script>
+  <script src="libs/other/BinaryHeap.js"></script>
+  <script src="libs/tween/tween.min.js"></script>
+  <script src="libs/d3/d3.js"></script>
+  <script src="libs/proj4/proj4.js"></script>
+  <script src="libs/openlayers3/ol.js"></script>
+  <script src="libs/i18next/i18next.js"></script>
+  <script src="libs/jstree/jstree.js"></script>
+  <script src="build/potree/potree.js"></script>
+  <script src="libs/plasio/js/laslaz.js"></script>
+
+  <script>
+    if (typeof Potree === "undefined") {
+      document.getElementById("err").style.display = "flex";
+    } else {
+      window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
+      viewer.setEDLEnabled(true);
+      viewer.setFOV(60);
+      viewer.setPointBudget(3_000_000);
+      viewer.setBackground("gradient");
+      viewer.loadGUI(() => {
+        viewer.setLanguage("en");
+        $("#menu_appearance").next().show();
+      });
+      Potree.loadPointCloud("pointcloud/hetherington_run5/metadata.json", "Hetherington Run 5", e => {
+        if (e.type === "loading_failed") {
+          document.getElementById("err").style.display = "flex";
+          return;
+        }
+        viewer.scene.addPointCloud(e.pointcloud);
+        viewer.fitToScreen();
+        let mat = e.pointcloud.material;
+        mat.size = 1;
+        mat.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+        mat.shape = Potree.PointShape.CIRCLE;
+      });
+    }
+  </script>
+</body>
+</html>
