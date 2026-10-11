@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <title>Ortho - Hetherington Run 5</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-  <script src="https://unpkg.com/shpjs@latest/dist/shp.js"></script>
   <style>
     html, body, #map { margin:0; padding:0; width:100%; height:100%; }
     #label {
@@ -44,7 +43,7 @@
     <div class="card">
       <div id="spinner"></div>
       <h2>Loading Ortho & Vegetation</h2>
-      <p class="sub">Caching imagery tiles & shapefile...</p>
+      <p class="sub">Caching imagery tiles & vegetation...</p>
       <div id="bar-track"><div id="bar-fill"></div></div>
       <div id="count">preparing...</div>
     </div>
@@ -121,26 +120,22 @@
       layer.bindPopup(popupContent);
     }
 
-    async function loadShapefile() {
+    async function loadVegetation() {
       try {
-        // Fetch the shapefile (shp.js will handle .zip archive)
-        const response = await fetch('HHH.zip');
-        const arrayBuffer = await response.arrayBuffer();
+        const response = await fetch('HHH.json');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const geojson = await response.json();
         
-        // Parse shapefile using shp.js
-        const geojson = await shp(arrayBuffer);
-        
-        // Add GeoJSON layer to map
         const geoJsonLayer = L.geoJSON(geojson, {
           style: getPolygonStyle,
           onEachFeature: onEachFeature
         });
         geoJsonLayer.addTo(map);
         
-        countEl.textContent = "shapefile loaded ✓";
+        countEl.textContent = "vegetation loaded ✓";
       } catch (error) {
-        console.error("Error loading shapefile:", error);
-        countEl.textContent = "shapefile load failed";
+        console.error("Error loading vegetation:", error);
+        countEl.textContent = "vegetation load failed";
       }
     }
 
@@ -153,8 +148,7 @@
         attribution: "UAV Survey 2026"
       }).addTo(map);
       
-      // Load shapefile overlay
-      loadShapefile();
+      loadVegetation();
       
       loader.classList.add("hidden");
       setTimeout(() => loader.remove(), 500);
