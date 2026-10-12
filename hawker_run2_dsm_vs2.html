@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DSM - Hawker Run 2</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <style>
@@ -31,13 +32,43 @@
     #spinner { width:22px; height:22px; margin:0 auto 14px; border:3px solid #33383f;
                border-top-color:#3da9fc; border-radius:50%; animation:spin .8s linear infinite; }
     @keyframes spin { to { transform:rotate(360deg); } }
-    .vegetation-tooltip { font-size:11px; padding:4px 6px; }
+
+    /* Layer selector sits below the "All scans" link */
+    .leaflet-top.leaflet-right { top:38px; }
+    .leaflet-control-layers { font:12px/1.5 -apple-system,Segoe UI,sans-serif; }
+
+    /* Vegetation legend */
+    .veg-legend { background:rgba(255,255,255,0.94); padding:8px 10px; border-radius:4px;
+                  font:12px/1.4 -apple-system,Segoe UI,sans-serif; color:#1c1f23;
+                  width:280px; max-width:calc(100vw - 40px);
+                  box-shadow:0 1px 5px rgba(0,0,0,.35); }
+    .veg-legend summary { font-weight:600; cursor:pointer; }
+    .veg-legend summary:focus-visible { outline:2px solid #0074D9; outline-offset:2px; }
+    .veg-legend .scope { color:#777; font-weight:400; }
+    .veg-legend .body { max-height:42vh; overflow-y:auto; margin-top:6px; padding-right:4px; }
+    .veg-legend .grp { font-weight:600; color:#444; margin:8px 0 2px; }
+    .veg-legend .grp:first-child { margin-top:0; }
+    .veg-legend .item { display:flex; align-items:center; gap:6px; padding:1px 0; }
+    .veg-legend .name { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .veg-legend .n { color:#888; font-variant-numeric:tabular-nums; }
+    .veg-legend .msg { color:#555; margin:4px 0 0; }
+    .sw { flex:0 0 14px; width:14px; height:11px; border:1px solid; border-radius:2px; display:inline-block; }
+
+    /* Popup */
+    .veg-popup { font-size:11px; }
+    .veg-popup .title { display:flex; gap:6px; align-items:flex-start; font-size:12px;
+                        font-weight:600; margin-bottom:6px; }
+    .veg-popup .title .sw { margin-top:2px; }
+    .veg-popup .grp { color:#666; font-weight:400; font-size:11px; }
+    .veg-popup table { border-collapse:collapse; }
+    .veg-popup td { padding:1px 8px 1px 0; vertical-align:top; }
+    .veg-popup td.k { color:#777; white-space:nowrap; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div id="label"><strong>DSM - Hawker Run 2 with Vegetation</strong></div>
-  <a id="home" href="index.html">&#8962; All scans</a>
+  <a id="home" href="index_vs2.html">&#8962; All scans</a>
 
   <div id="loader">
     <div class="card">
@@ -51,13 +82,19 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const TILE_URL    = "tiles/hawker_run2/dsm/{z}/{x}/{y}.png";
-    const BOUNDS      = { w:141.260199, s:-37.474135, e:141.269751, n:-37.466281 };
-    const MIN_NZ      = 14;
-    const MAX_NZ      = 22;
-    const DO_PREFETCH = true;
-    const CAP         = 6000;
-    const CONC        = 12;
+    const TILE_URL     = "tiles/hawker_run2/dsm/{z}/{x}/{y}.png";
+    const RASTER_NAME  = "DSM (UAV 2026)";
+    const BOUNDS       = { w:141.260199, s:-37.474135, e:141.269751, n:-37.466281 };
+    const MIN_NZ       = 14;
+    const MAX_NZ       = 22;
+    const DO_PREFETCH  = true;
+    const CAP          = 6000;
+    const CONC         = 12;
+
+    // Field vegetation assessment overlay
+    const VEG_URL      = "field-vegetation-assessment.json";
+    const VEG_NAME     = "Field vegetation assessment";
+    const VEG_FIELD    = "Vegetation";   // attribute that drives colour, legend and popup title
 
     const loader  = document.getElementById("loader");
     const barFill = document.getElementById("bar-fill");
@@ -67,8 +104,11 @@
       .fitBounds([[BOUNDS.s, BOUNDS.w], [BOUNDS.n, BOUNDS.e]]);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "(c) OpenStreetMap contributors", maxZoom: 22
+      attribution: "(c) OpenStreetMap contributors", maxZoom: 22, maxNativeZoom: 19
     }).addTo(map);
+
+    // Layer selector: overlays are added as tick boxes once they exist
+    const layerControl = L.control.layers(null, null, { collapsed: false, position: "topright" }).addTo(map);
 
     function lon2x(lon, z) { return Math.floor((lon + 180) / 360 * Math.pow(2, z)); }
     function lat2y(lat, z) {
@@ -86,70 +126,166 @@
       return urls;
     }
 
-    // Color palette for vegetation types
-    const vegetationColors = {
-      'grass': '#90EE90',
-      'shrub': '#DAA520',
-      'tree': '#228B22',
-      'water': '#4A90E2',
-      'bare': '#A0A0A0',
-      'default': '#66BB6A'
-    };
+    // ---------------------------------------------------------------
+    // Vegetation colour scheme
+    // Each Vegetation value is placed in a broad group (first matching rule wins).
+    // The group sets the hue; each distinct value gets its own shade within it.
+    // Edit the rules here if a class lands in the wrong group.
+    // ---------------------------------------------------------------
+    const VEG_GROUPS = [
+      { label: "Not recorded",                         hue:   0, sat:  0, light: [60, 60], test: v => v === "" },
+      { label: "Exotic or no native vegetation",       hue:  28, sat: 60, light: [36, 72], test: v => /exotic|no (significant )?native|plantation/.test(v) },
+      { label: "Single trees",                         hue: 160, sat: 70, light: [20, 32], test: v => /single tree/.test(v) },
+      { label: "Riparian, sedgy and wetland",          hue: 200, sat: 70, light: [32, 66], test: v => /riparian|sedgy|aquatic|swamp|wetland|\bdam\b/.test(v) },
+      { label: "Heathy woodland and heathland",        hue: 285, sat: 38, light: [38, 70], test: v => /heath/.test(v) },
+      { label: "Grassy woodland and native grassland", hue:  62, sat: 65, light: [34, 60], test: v => /grassy|grassland|native grass/.test(v) },
+      { label: "Herb-rich and other woodland",         hue: 115, sat: 45, light: [28, 58], test: v => /herb-rich|woodland|sands/.test(v) },
+      { label: "Other",                                hue: 330, sat: 45, light: [40, 70], test: () => true },
+    ];
 
-    function getPolygonStyle(feature) {
-      let vegType = (feature.properties.VEG_TYPE || 'default').toLowerCase();
-      let color = vegetationColors[vegType] || vegetationColors.default;
-      
+    const vegValue = props => String((props && props[VEG_FIELD]) ?? "").trim();
+    const groupIndex = v => VEG_GROUPS.findIndex(g => g.test(v.toLowerCase()));
+    const vegClasses = new Map();   // value -> { value, group, fill, stroke }
+
+    function buildVegClasses(features) {
+      const byGroup = VEG_GROUPS.map(() => new Set());
+      features.forEach(f => { const v = vegValue(f.properties); byGroup[groupIndex(v)].add(v); });
+      byGroup.forEach((set, gi) => {
+        const g = VEG_GROUPS[gi];
+        const values = [...set].sort((a, b) => a.localeCompare(b));
+        values.forEach((value, i) => {
+          const t = values.length > 1 ? i / (values.length - 1) : 0.5;
+          const l = g.light[0] + t * (g.light[1] - g.light[0]);
+          const h = g.hue + (t - 0.5) * (g.sat ? 16 : 0);   // small hue drift keeps shades apart
+          vegClasses.set(value, {
+            value, group: gi,
+            fill:   `hsl(${h.toFixed(0)}, ${g.sat}%, ${l.toFixed(0)}%)`,
+            stroke: `hsl(${h.toFixed(0)}, ${g.sat}%, ${Math.max(12, l - 22).toFixed(0)}%)`,
+          });
+        });
+      });
+    }
+
+    function vegStyle(feature) {
+      const c = vegClasses.get(vegValue(feature.properties));
+      const blank = c.value === "";
       return {
-        fillColor: color,
-        fillOpacity: 0.4,
-        color: '#333',
-        weight: 1,
-        opacity: 0.6
+        fillColor: c.fill, fillOpacity: blank ? 0.15 : 0.5,
+        color: c.stroke, weight: blank ? 1.5 : 1, opacity: 0.9,
+        dashArray: blank ? "4 3" : null
       };
     }
 
-    function onEachFeature(feature, layer) {
-      let popupContent = '<div class="vegetation-tooltip">';
-      if (feature.properties) {
-        for (let key in feature.properties) {
-          popupContent += `<b>${key}:</b> ${feature.properties[key]}<br>`;
-        }
-      }
-      popupContent += '</div>';
-      layer.bindPopup(popupContent);
+    const esc = s => String(s).replace(/[&<>"']/g, ch =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    const swatch = c => `<span class="sw" style="background:${c.fill};border-color:${c.stroke}"></span>`;
+
+    function fmtValue(key, v) {
+      if (v === null || v === undefined || String(v).trim() === "") return "&mdash;";
+      if (typeof v === "number" && /edi|date/i.test(key) && v > 1e11 && v < 1e13)
+        return new Date(v).toISOString().slice(0, 10);   // epoch ms -> YYYY-MM-DD
+      return esc(v);
     }
+
+    function vegPopup(feature) {
+      const p = feature.properties || {};
+      const c = vegClasses.get(vegValue(p));
+      const title = c.value === "" ? "Vegetation not recorded" : esc(c.value);
+      let rows = "";
+      for (const k in p) if (k !== VEG_FIELD) rows += `<tr><td class="k">${esc(k)}</td><td>${fmtValue(k, p[k])}</td></tr>`;
+      return `<div class="veg-popup">
+                <div class="title">${swatch(c)}<div>${title}<br><span class="grp">${esc(VEG_GROUPS[c.group].label)}</span></div></div>
+                <table>${rows}</table>
+              </div>`;
+    }
+
+    // ---------------------------------------------------------------
+    // Legend: lists the Vegetation classes visible in the current view
+    // ---------------------------------------------------------------
+    let vegLayer = null;
+    const legend = L.control({ position: "bottomright" });
+    legend.onAdd = function () {
+      const div = L.DomUtil.create("div", "veg-legend");
+      div.innerHTML = `<details open><summary>Vegetation <span class="scope">(in view)</span></summary>
+                         <div class="body"><p class="msg">Loading field vegetation assessment...</p></div></details>`;
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      return div;
+    };
+    legend.addTo(map);
+    const legendBody = () => legend.getContainer().querySelector(".body");
+
+    function updateLegend() {
+      if (!vegLayer || !map.hasLayer(vegLayer)) return;
+      const view = map.getBounds();
+      const counts = new Map();
+      vegLayer.eachLayer(l => {
+        if (view.intersects(l.getBounds())) counts.set(l.vegValue, (counts.get(l.vegValue) || 0) + 1);
+      });
+      if (counts.size === 0) {
+        legendBody().innerHTML = `<p class="msg">No assessed polygons in view. Zoom out or pan to see them.</p>`;
+        return;
+      }
+      let html = "";
+      VEG_GROUPS.forEach((g, gi) => {
+        const items = [...counts.entries()]
+          .filter(([v]) => vegClasses.get(v).group === gi)
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+        if (!items.length) return;
+        html += `<div class="grp">${esc(g.label)}</div>`;
+        items.forEach(([v, n]) => {
+          const c = vegClasses.get(v);
+          const name = v === "" ? "Not recorded" : esc(v);
+          html += `<div class="item" title="${name}">${swatch(c)}<span class="name">${name}</span><span class="n">${n}</span></div>`;
+        });
+      });
+      legendBody().innerHTML = html;
+    }
+
+    map.on("moveend", updateLegend);
+    map.on("overlayadd", e => { if (e.layer === vegLayer) { legend.getContainer().style.display = ""; updateLegend(); } });
+    map.on("overlayremove", e => { if (e.layer === vegLayer) legend.getContainer().style.display = "none"; });
+
+    // Start fetching the vegetation layer straight away, in parallel with the tile prefetch
+    const vegData = fetch(VEG_URL).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    });
 
     async function loadVegetation() {
       try {
-        const response = await fetch('HHH.json');
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const geojson = await response.json();
-        
-        const geoJsonLayer = L.geoJSON(geojson, {
-          style: getPolygonStyle,
-          onEachFeature: onEachFeature
-        });
-        geoJsonLayer.addTo(map);
-        
-        countEl.textContent = "vegetation loaded ✓";
+        const geojson = await vegData;
+        buildVegClasses(geojson.features || []);
+        vegLayer = L.geoJSON(geojson, {
+          style: vegStyle,
+          onEachFeature: (feature, layer) => {
+            layer.vegValue = vegValue(feature.properties);
+            layer.bindPopup(() => vegPopup(feature), { maxWidth: 340 });
+          }
+        }).addTo(map);
+        layerControl.addOverlay(vegLayer, VEG_NAME);
+        updateLegend();
       } catch (error) {
         console.error("Error loading vegetation:", error);
-        countEl.textContent = "vegetation load failed";
+        legendBody().innerHTML = `<p class="msg">Couldn't load ${VEG_URL} (${esc(error.message)}). Check the file sits next to this page in the repo.</p>`;
       }
     }
 
+    let shown = false;
     function showMap() {
-      L.tileLayer(TILE_URL, {
+      if (shown) return;
+      shown = true;
+      const raster = L.tileLayer(TILE_URL, {
         opacity: 0.95, maxZoom: 22,
         minNativeZoom: MIN_NZ, maxNativeZoom: MAX_NZ,
         bounds: [[BOUNDS.s, BOUNDS.w], [BOUNDS.n, BOUNDS.e]],
         updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 4,
         attribution: "UAV Survey 2026"
       }).addTo(map);
-      
+      layerControl.addOverlay(raster, RASTER_NAME);
+
       loadVegetation();
-      
+
       loader.classList.add("hidden");
       setTimeout(() => loader.remove(), 500);
     }
