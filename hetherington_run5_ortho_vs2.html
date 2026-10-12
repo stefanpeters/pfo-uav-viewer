@@ -64,7 +64,7 @@
     const countEl = document.getElementById("count");
 
     const map = L.map("map", { maxZoom: 22, fadeAnimation: false })
-      .fitBounds([[BOUNDS.s, BOUNDS.w], [BOUNDS.n, BOUNDS.e]]);
+      .setView([-37.642320, 141.340912], 15);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution: "(c) OpenStreetMap contributors", maxZoom: 22
